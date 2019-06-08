@@ -1,0 +1,282 @@
+from __future__ import print_function
+from PSPApp import *
+import ctypes
+import struct
+import pprint as pp
+
+OpenClip = ctypes.windll.user32.OpenClipboard
+EmptyClip = ctypes.windll.user32.EmptyClipboard
+GetClip = ctypes.windll.user32.GetClipboardData
+SetClip = ctypes.windll.user32.SetClipboardData
+CloseClip = ctypes.windll.user32.CloseClipboard
+regFormat = ctypes.windll.user32.RegisterClipboardFormatA
+CF_UNICODETEXT = 13
+
+GlobalAlloc = ctypes.windll.kernel32.GlobalAlloc
+GlobalLock = ctypes.windll.kernel32.GlobalLock
+GlobalUnlock = ctypes.windll.kernel32.GlobalUnlock
+GlobalSize = ctypes.windll.kernel32.GlobalSize
+GMEM_MOVEABLE = 0x0002
+GMEM_ZEROINIT = 0x0040
+
+unicode_type = type(u'')
+PSPHeader = "Paint Shop Pro Image File\n\x1a\x00\x00\x00\x00\x00"
+LayerStyle = "\x41\x44\x53\x4c\xa0\x00\x00\x00\x00\x10\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xf6\x28\xdc\x3e\xff\xff\xff\x00\xcd\xcc\x4c\x3f\x00\x00\x00\x00\xcd\xcc\xcc\x3d\x00\x00\x00\x00\x00\x00\x00\x3f\x00\x00\x00\xbf\x00\x00\x00\x3f\x00\x00\x00\x3f\x00\xc9\x7d\x10\xcd\xcc\xcc\x3d\xff\xff\xff\x00\x00\x00\x00\x3f\x00\x00\x00\xbf\x00\x00\x00\x3f\x00\x00\x00\x3f\x00\x00\x00\x00\x9a\x99\x99\x3e\xff\xff\xff\x00\x00\x00\x00\x3f\x01\x00\x00\x00\x00\x00\x80\x3f\x00\x00\x00\x00\xcd\xcc\x4c\x3e\x00\x00\x00\x00\xcd\xcc\x4c\x3f\x00\x00\x00\x3f\x00\x00\x00\xbf\x00\x00\x00\x00\x00\x00\x00\x3f\x00\x00\x00\x00\x00\x00\x00\x3f\x03\x00\x00\x00"
+
+
+def getLayerStyle():
+    ls = regFormat('Corel Paint Shop Pro 12.0 Clipboard Format')
+    buff = None
+    OpenClip(None)
+    h = GetClip(ls)
+    pcontents = GlobalLock(h)
+    size = GlobalSize(h)
+    if pcontents and size:
+        raw_data = ctypes.create_string_buffer(size)
+        ctypes.memmove(raw_data, pcontents, size)
+        buff = raw_data[:]
+    GlobalUnlock(h)
+    CloseClip()
+    if buff and PSPHeader in buff:
+        return buff
+    else:
+        return None
+
+def putLayerStyle(style):
+    ls = LayerStyle
+    formats = {"13:<B":[style['Enabled']], #Enabled
+    "116:<4Bf4B3f":[style['DropShadow']['Enabled'],0,0,0,style['DropShadow']['Size'],style['DropShadow']['Color'][0],style['DropShadow']['Color'][1],style['DropShadow']['Color'][2],0, style['DropShadow']['Opacity'],style['DropShadow']['OffsetX'],style['DropShadow']['OffsetY']], #DropShadow
+    "92:<4Bf4Bf":[style['InnerGlow']['Enabled'],0,0,0,style['InnerGlow']['Size'],style['InnerGlow']['Color'][0],style['InnerGlow']['Color'][1],style['InnerGlow']['Color'][2],0,style['InnerGlow']['Opacity']], #InnerGlow
+    "20:<4Bf4Bf":[style['OuterGlow']['Enabled'],0,0,0,style['OuterGlow']['Size'],style['OuterGlow']['Color'][0],style['OuterGlow']['Color'][1],style['OuterGlow']['Color'][2],0,style['OuterGlow']['Opacity']], #OuterGlow
+    "64:<4Bf4B4f":[style['Bevel']['Enabled'],0,0,0,style['Bevel']['Size'],0,0,0,0,style['Bevel']['Opacity'],style['Bevel']['LightX'],style['Bevel']['LightY'],style['Bevel']['LightZ']], #Bevel
+    "36:<4Bf4B4f":[style['Emboss']['Enabled'],0,0,0,style['Emboss']['Size'],0,0,0,0,style['Emboss']['Opacity'],style['Emboss']['LightX'],style['Emboss']['LightY'],style['Emboss']['LightZ']], #Emboss
+    "108:<4Bf":[style['Object']['Enabled'],0,0,0,style['Object']['Opacity']], #Object
+    "140:<4Bfif":[style['Reflection']['Enabled'],0,0,0,style['Reflection']['Size'],style['Reflection']['Axis'],style['Reflection']['Opacity']]} #Reflection
+    for x in formats:
+        offset, form = x.split(":")
+        offset = int(offset)
+        size = struct.calcsize(form)
+        d = struct.pack(form, *formats[x])
+        ls = ls[0:offset] + d + ls[offset+size:]
+    put(ls)
+
+def put(data):
+    lsHandle = regFormat('LayerStyle')
+    OpenClip(None)
+    EmptyClip()
+    handle = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, len(data))
+    pcontents = GlobalLock(handle)
+    ctypes.memmove(pcontents, data, len(data))
+    GlobalUnlock(handle)
+    r = SetClip(lsHandle, handle)
+    if not r:
+        error = ctypes.GetLastError()
+        print("ERROR:", error)
+    CloseClip()
+
+def printStyle(buff):
+    styles = {140:'Reflection', 20: 'Outer Glow', 64: 'Bevel', 36:'Emboss', 92:'Inner Glow', 108:'Layer', 116: 'Drop Shadow'}
+    if not buff[:4] == "ADSL":
+        return None
+    for key in styles:
+        if ord(buff[key]) == 1:
+            print(styles[key])
+    pp.pprint(parseStyle(buff), width = 30)
+
+    
+def parseStyle(buff):
+    if not buff:
+        return None
+    start = buff.index('~BK\x00\x21\x00') + 10
+    length = struct.unpack("<I", buff[start:start+4])[0]
+    buff = buff[start:start+length]
+    formats = ["5<B", #Enabled
+    "13<Bf4B4f", #OuterGlow
+    "38<Bf4B4f", #Emboss
+    "63<Bf4B4f", #Bevel
+    "88<Bf4B4f", #InnerGlow
+    "113<B6f", #Object
+    "138<Bf4B4f", #Drop Shadow
+    "163<Bfif"] #Reflection
+    data = []
+    def roundValue(val):
+        if type(val) == float:
+            return round(val, 2)
+        return val
+        
+    for x in formats:
+        offset, format = x.split("<")
+        format = "<" + format
+        offset = int(offset)
+        data.append(list(struct.unpack(format, buff[offset: offset + struct.calcsize(format)])))
+    for x in range(len(data)):
+        data[x] = list(map(roundValue,data[x]))
+    if data[1] == [0, 0.0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0] :
+        print("Empty DropShadow")
+        return None
+    return {'Enabled': data[0][0], 
+        'DropShadow': {
+            'Enabled': data[6][0], 
+            'Color': tuple(data[6][2:5]), 
+            'Size': data[6][1], 
+            'Opacity': data[6][6], 
+            'OffsetX': data[6][7],
+            'OffsetY': data[6][8],
+            }, 
+        'InnerGlow': {
+            'Enabled': data[4][0], 
+            'Color': tuple(data[4][2:5]), 
+            'Size': data[4][1], 
+            'Opacity': data[4][6]
+            }, 
+        'OuterGlow': {
+            'Enabled': data[1][0], 
+            'Color': tuple(data[1][2:5]), 
+            'Size': data[1][1], 
+            'Opacity': data[1][6]
+            }, 
+        'Bevel': {
+            'Enabled': data[3][0], 
+            'Color': tuple(data[3][2:5]), 
+            'Size': data[3][1], 
+            'Opacity': data[3][6], 
+            'LightX': data[3][7], 
+            'LightY': data[3][8], 
+            'LightZ': data[3][9]
+            }, 
+        'Emboss': {
+            'Enabled': data[2][0], 
+            'Size': data[2][1], 
+            'Opacity': data[2][6], 
+            'LightX': data[2][7], 
+            'LightY': data[2][8], 
+            'LightZ': data[2][9]
+        }, 
+        'Object': {
+            'Enabled': data[5][0], 
+            'Opacity': data[5][3]
+            }, 
+        'Reflection': {
+            'Enabled': data[7][0], 
+            'Size': data[7][1], 
+            'Opacity': data[7][3], 
+            'Axis': data[7][2]
+            }
+    }
+
+def update(source,dest): #updates dest with source
+    for key in source:
+        if key == "Enabled":
+            continue
+            
+        if dest[key]['Enabled'] and source[key]['Enabled']:
+            for k in dest[key]:
+                dest[key][k] = source[key][k]
+
+    return dest
+
+def setStyle(Environment, style):
+    # Layer Properties
+    App.Do( Environment, 'LayerProperties', {
+            'General': None, 
+            'BlendRanges': None, 
+            'Path': None, 
+            'ArtMediaTexture': None, 
+            'Effects': style, 
+            'BrightnessContrast': None, 
+            'ChannelMixer': None, 
+            'ColorBalance': None, 
+            'CurveParams': None, 
+            'HSL': None, 
+            'Threshold': None, 
+            'Levels': None, 
+            'Posterize': None, 
+            'Vibrancy': None, 
+            'Overlay': None, 
+            'LocalToneMapping': None, 
+            'Invert': None, 
+            'HistogramAdjustment': None, 
+            'FillLightClarity': None, 
+            'GeneralSettings': {
+                'ExecutionMode': App.Constants.ExecutionMode.Default, 
+                'AutoActionMode': App.Constants.AutoActionMode.Match, 
+                'Version': ((22,0,0),1)
+                }
+            })
+
+
+def ScriptProperties():
+    return {
+        'Author': u'LeviFiction',
+        'Copyright': u'2019',
+        'Description': u'Updates destination layer style with common styles from source',
+        'Host': u'PaintShop Pro',
+        'Host Version': u'12.00'
+        }
+
+def Do(Environment):
+    print("Copying Layer")
+    # Copy
+    App.Do( Environment, 'Copy', { })
+    print("Parsing Layer Style")
+    source = parseStyle(getLayerStyle())
+    if not source:
+        print("No layer Style Found")
+        return
+    pp.pprint(source)
+    putLayerStyle(source)
+
+    # # LayerStylesCopy
+    # App.Do( Environment, 'LayerStylesCopy', {})
+    # dest = parseStyle(getLayerStyle())
+    # if not dest:
+    #     return
+    # new = update(source, dest)
+    # setStyle(Environment, new)
+
+#472 - Start of block 33 in test2.pspimage 
+#476 - Block type - 33? sub block Layer Styles
+#478 - Block Size
+#47C - Chunk Size - equal to block size - 263? - 4 bytes
+#480 - Enabled Flag - 1 byte
+#481 - ? 4 bytes
+#485 - count? 4 bytes
+#489 - Enabled Flag - 1 byte Outerglow?  (total: 25 bytes)
+#48A - Float - 4 bytes - Size
+#48E - Color - 4 Bytes - RGBA
+#492 - Float - 4 bytes - Opacity
+#496 - 3 - 4 byte padding?
+#4A2 - 1 byte - Emboss Flag (total: 25 bytes)
+#4A3 - Float - 4 Bytes - Size
+#4A7 - Color - 4 Bytes - RGBA - Black
+#4AB - Float - 4 Bytes - Opacity
+#4AF - Float - 4 Bytes - X
+#4B3 - Float - 4 Bytes - Y
+#4B7 - Float - 4 Bytes - Z
+#4BB - 1 byte - Bevel Flag (total: 25 bytes)
+#4BC - Float - 4 Bytes - Size
+#4C0 - Color - 4 Bytes - RGBA
+#4C4 - Float - 4 Bytes - Opacity
+#4C8 - Float - 4 Bytes - X
+#4CC - Float - 4 Bytes - Y
+#4D0 - Float - 4 Bytes - Z
+#4D4 - 1 byte - Inner Glow Flag (total: 25 bytes)
+#4D5 - Float - 4 Bytes - Size
+#4D9 - Color - 4 Bytes - RGBA
+#4DD - Float - 4 Bytes - Opacity
+#4E1 - 12 byte padding ? (X,Y,Z)
+#4ED - 1 byte - Layer/Object Flag (total: 25 bytes)
+#4EE - 8 byte padding (Size and color?)
+#4F6 - Float - 4 Bytes - Opacity
+#4FA - 12 byte padding? (X, Y, Z)
+#506 - 1 byte - Drop Shadow Flag (total: 25 bytes)
+#507 - Float - 4 Bytes - Size
+#50B - Color - 4 Bytes - RGBA 
+#50F - Float - 4 Bytes - Opacity
+#513 - Float - 4 Bytes - X
+#517 - Float - 4 Bytes - Y
+#51B - 4 Byte padding (Z)
+#51F - 1 byte - Reflection Flag
+#520 - Float - 4 Bytes - Size
+#524 - S Int - 4 Bytes - Axis
+#528 - Float - 4 Bytes - Opacity (starts at -1.01 = 1%  -2 = 100%)
