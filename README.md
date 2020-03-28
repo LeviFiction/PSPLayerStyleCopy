@@ -1,10 +1,10 @@
 # PSPLayerStyleCopy
-Installation
+## Installation
 
 This script is for the photo editing program PaintShop Pro from Corel.  To install this script find your Scripts-Trusted folder for your installation of PSP.  
 Then download this script into that folder.
 
-Running this script
+## Running this script
 
 To run this script open PSP and an image.  
 
